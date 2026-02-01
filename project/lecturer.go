@@ -210,6 +210,7 @@ func (a *HybridHandler) UpdateLecturerHandler(w http.ResponseWriter, r *http.Req
 	go LogActivity("UPDATE_LECTURER", "system")
 	go AuditLog("UPDATE", "LECTURER", lecturers.Id.Hex(), "system")
 
+	// send response
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(lecturers)
 }
