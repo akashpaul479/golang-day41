@@ -55,6 +55,7 @@ func ValidateLecturer(lecturer Lecturer) error {
 
 // CreateLecturerHandler handles lecturers creation
 func (a *HybridHandler) CreateLecturerHandler(w http.ResponseWriter, r *http.Request) {
+
 	// Decode incoming json request
 	var lecturers Lecturer
 	if err := json.NewDecoder(r.Body).Decode(&lecturers); err != nil {
@@ -104,8 +105,61 @@ func (a *HybridHandler) CreateLecturerHandler(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(lecturers)
 }
 
-// GetLecturerHandler Fetches lecturers by ID
+// GetLecturerHandler Fetches all lecturer
 func (a *HybridHandler) GetLecturerHandler(w http.ResponseWriter, r *http.Request) {
+
+	// Log Activity
+	go LogActivity("GET_ALL_LECTURERS", "system")
+
+	// Redis cache for all lecturers
+	cacheKey := "all_lecturers"
+
+	// Attempt to fetch from redis cache
+	value, err := a.Redis.Client.Get(a.Ctx, cacheKey).Result()
+	if err == nil {
+		log.Println("cache hit...")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(value))
+		return
+	}
+	fmt.Println("Cache miss querying MongoDB...")
+
+	ctx, cancel := context.WithTimeout(a.Ctx, 10*time.Second)
+	defer cancel()
+
+	// cursor for all lecturers documents
+	cursor, err := a.MongoDB.Lecturer.Find(ctx, bson.M{})
+	if err != nil {
+		http.Error(w, "failed to fetch lecturers", http.StatusInternalServerError)
+		return
+	}
+	defer cursor.Close(ctx)
+
+	// Decode all lecturers into slice
+	var lecturers []Lecturer
+	if err := cursor.All(ctx, &lecturers); err != nil {
+		http.Error(w, "failed to decode lecturers", http.StatusInternalServerError)
+		return
+	}
+
+	// marshal lecturers to json
+	jsondata, err := json.Marshal(lecturers)
+	if err != nil {
+		http.Error(w, "failed to marshal lecturers", http.StatusInternalServerError)
+		return
+	}
+
+	// cache result in redis for 10 minutes
+	go a.Redis.Client.Set(a.Ctx, cacheKey, jsondata, 10*time.Minute)
+
+	// send response
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(jsondata)
+}
+
+// GetLecturerByIDHandler Fetches lecturers by ID
+func (a *HybridHandler) GetLecturerByIDHandler(w http.ResponseWriter, r *http.Request) {
+
 	// Extract id from URL
 	vars := mux.Vars(r)
 	id := vars["id"]
@@ -129,6 +183,7 @@ func (a *HybridHandler) GetLecturerHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Create context with timeout to avoid hanging DB calls
 	var lecturers Lecturer
 	ctx, cancel := context.WithTimeout(a.Ctx, 10*time.Second)
 	defer cancel()
@@ -155,8 +210,12 @@ func (a *HybridHandler) GetLecturerHandler(w http.ResponseWriter, r *http.Reques
 
 // UpdateLecturerHandler updates lecturer details
 func (a *HybridHandler) UpdateLecturerHandler(w http.ResponseWriter, r *http.Request) {
+
+	// Extract id from URL
 	vars := mux.Vars(r)
 	id := vars["id"]
+
+	// Decode incoming JSON requests
 	var lecturers Lecturer
 	if err := json.NewDecoder(r.Body).Decode(&lecturers); err != nil {
 		http.Error(w, "Failed to decode response", http.StatusInternalServerError)
@@ -173,6 +232,8 @@ func (a *HybridHandler) UpdateLecturerHandler(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		http.Error(w, "invalid id format", http.StatusBadRequest)
 	}
+
+	// create context with timeout to avoid DB calls
 	ctx, cancel := context.WithTimeout(a.Ctx, 10*time.Minute)
 	defer cancel()
 
@@ -198,6 +259,7 @@ func (a *HybridHandler) UpdateLecturerHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 	lecturers.Id = objID
+
 	// update redis cache
 	jsonData, err := json.Marshal(lecturers)
 	if err != nil {
@@ -217,6 +279,8 @@ func (a *HybridHandler) UpdateLecturerHandler(w http.ResponseWriter, r *http.Req
 
 // DeleteLecturerHandler deletes lecturer by id
 func (a *HybridHandler) DeleteLecturerHandler(w http.ResponseWriter, r *http.Request) {
+
+	// Extract id from URL
 	vars := mux.Vars(r)
 	id := vars["id"]
 
@@ -225,6 +289,8 @@ func (a *HybridHandler) DeleteLecturerHandler(w http.ResponseWriter, r *http.Req
 		http.Error(w, "invalid id format", http.StatusBadRequest)
 		return
 	}
+
+	// create context withtimeout to avoid DB calls
 	ctx, cancel := context.WithTimeout(a.Ctx, 10*time.Minute)
 	defer cancel()
 
@@ -245,6 +311,7 @@ func (a *HybridHandler) DeleteLecturerHandler(w http.ResponseWriter, r *http.Req
 	go LogActivity("DELETE_LECTURER", "system")
 	go AuditLog("DELETE", "LECTURER", objID.Hex(), "system")
 
+	// send response
 	w.Header().Set("Content-Type", "system")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Lecturer deleted!"))
