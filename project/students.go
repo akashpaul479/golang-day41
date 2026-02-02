@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 )
 
@@ -94,8 +95,31 @@ func (a *HybridHandler) CreateStudentHandler(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(students)
 }
 
-// GetStudentHandler retrives a student by id
-func (a *HybridHandler) GetstudentHandler(w http.ResponseWriter, r *http.Request) {
+// GetStudentHandler to get all students
+func (a *HybridHandler) GetStudentHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.MySQL.db.Query("SELECT id , name , age , email , dept FROM students")
+	if err != nil {
+		http.Error(w, "unable to fetch students", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var students []Student
+	for rows.Next() {
+		var s Student
+		if err := rows.Scan(&s.Id, &s.Name, &s.Age, &s.Email, &s.Dept); err != nil {
+			http.Error(w, "rows scan failed", http.StatusInternalServerError)
+			return
+		}
+		students = append(students, s)
+
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(students)
+}
+
+// GetStudentByIDHandler retrives a student by id
+func (a *HybridHandler) GetstudentByIDHandler(w http.ResponseWriter, r *http.Request) {
 	// Extract student id from URl
 	vars := mux.Vars(r)
 	id := vars["id"]
@@ -146,7 +170,7 @@ func (a *HybridHandler) UpdateStudentHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// validate updqated data
+	// validate updated data
 	if err := ValidateStudent(students); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
