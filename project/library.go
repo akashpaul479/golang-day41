@@ -116,10 +116,10 @@ func (a *HybridHandler) CreateLibraryHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Insert library records
-	res, err := tx.Exec("INSERT INTO libraries (title , availablecopies) VALUES (? , ?)", libraries.Title, libraries.Availablecopies)
+	res, err := tx.Exec("INSERT INTO libraries (title , available_copies) VALUES (? , ?)", libraries.Title, libraries.Availablecopies)
 	if err != nil {
 		tx.Rollback()
-		http.Error(w, "failed to insert libraries", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("failed to insert libraries: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -184,18 +184,19 @@ func (a *HybridHandler) GetLibraryByIDHandler(w http.ResponseWriter, r *http.Req
 	var lib Library
 
 	// Fetch library details
-	err = a.MySQL.db.QueryRow("SELECT title , availablecopies FROM libraries WHERE library_id=?", id).Scan(&lib.Title, &lib.Availablecopies)
+	err = a.MySQL.db.QueryRow("SELECT library_id, title , available_copies FROM libraries WHERE library_id=?", id).Scan(&lib.Libraryid, &lib.Title, &lib.Availablecopies)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "library not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, "Failed to fetch library", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to fetch library: %v", err), http.StatusInternalServerError)
 		return
 	}
 	// Fetch Books
-	booksRows, err := a.MySQL.db.Query("SELECT book_id , book_name FROM books WHERE library_id", id)
+	booksRows, err := a.MySQL.db.Query("SELECT book_id , book_name FROM books WHERE library_id=?", id)
 	if err != nil {
+		log.Printf("Failed to fetch books: %v", err)
 		http.Error(w, "failed to fetch books", http.StatusInternalServerError)
 		return
 	}
@@ -240,7 +241,7 @@ func (a *HybridHandler) GetLibraryByIDHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 	// cache in redis
-	a.Redis.Client.Set(a.Ctx, id, responseJson, 10*time.Minute)
+	a.Redis.Client.Set(a.Ctx, id, string(responseJson), 10*time.Minute)
 
 	// return response
 	w.Header().Set("Content-Type", "application/json")
@@ -263,7 +264,7 @@ func (a *HybridHandler) Borrowbooks(w http.ResponseWriter, r *http.Request) {
 	}
 	//  check book is available
 	var available int
-	err := a.MySQL.db.QueryRow("SELECT available_copies FROM books WHERE book_id=?", records.Bookid).Scan(&available)
+	err := a.MySQL.db.QueryRow("SELECT available_copies FROM libraries WHERE library_id=(SELECT library_id FROM books WHERE book_id=?)", records.Bookid).Scan(&available)
 	if err != nil {
 		http.Error(w, "Book not found", http.StatusNotFound)
 		return
@@ -273,13 +274,13 @@ func (a *HybridHandler) Borrowbooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Insert borrow records
-	_, err = a.MySQL.db.Exec("INSERT INTO borrow_records(user_id , usertype , book_id , borrow_date) VALUES (? , ? , ? , ?),CURDATE()", records.Userid, records.Usertype, records.Bookid)
+	_, err = a.MySQL.db.Exec("INSERT INTO borrow_records(user_id , usertype , book_id , borrow_date) VALUES (? , ? , ? ,CURDATE())", records.Userid, records.Usertype, records.Bookid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// Decrement availables copies
-	_, err = a.MySQL.db.Exec("UPDATE books available_copies= available_copies-1 WHERE book_id=?", records.Bookid)
+	_, err = a.MySQL.db.Exec("UPDATE books SET available_copies= available_copies-1 WHERE book_id=?", records.Bookid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -313,7 +314,7 @@ func (a *HybridHandler) ReturnBooksHandler(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "failed to update", http.StatusInternalServerError)
 		return
 	}
-	rows, _ := res.LastInsertId()
+	rows, _ := res.RowsAffected()
 	if rows == 0 {
 		http.Error(w, "no borrow records found", http.StatusInternalServerError)
 		return
